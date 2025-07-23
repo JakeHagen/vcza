@@ -73,7 +73,17 @@ def ingest_block(in_, root, block, infos):
 
     for idx, v in enumerate(vcf):
         for field in d_:
-            d_[field][idx] = v.INFO[field]
+            # if the variant doesnt have the info field, continue (keep array default value)
+            try:
+                field_val = v.INFO[field]
+            except KeyError:
+                continue
+            # if field value is none ie "." (None from cyvcf2), continue (keep the array fill value)
+            try:
+                d_[field][idx] = field_val
+            except TypeError:
+                if not field_val:
+                    continue
 
     for field in d_:
         root[f"variant_{field}"].blocks[block] = d_[field]

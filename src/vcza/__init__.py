@@ -2,7 +2,7 @@ import click
 import zarr
 
 from .write_block import write_block
-from .ingest_block import ingest_block, create_info_array, parse_infos
+from .ingest_block import ingest_block
 from .dvcza import dvcza
 
 
@@ -12,19 +12,10 @@ def cli():
 
 
 @cli.command()
-@click.option("-z", "--vcz")
 @click.option("-b", "--block", type=int, default=None)
+@click.argument("vcz")
 def write(vcz, block):
-    root = zarr.open(vcz, mode="r+")
-    write_block(root, block, None)
-
-@cli.command()
-@click.option("-i", "--infos", multiple=True)
-@click.option("-z", "--vcz", type=click.Path(exists=True))
-def initinfos(vcz, infos):
-    root = zarr.open(vcz, mode="r+")
-    for field, dtype, fill in parse_infos(infos):
-        create_info_array(root, field, dtype, fill)
+    write_block(vcz, block, None)
 
 @cli.command()
 @click.option("-i", "--infos", multiple=True)
@@ -32,8 +23,7 @@ def initinfos(vcz, infos):
 @click.option("-z", "--vcz", type=click.Path(exists=True))
 @click.argument("vcf", default="-")
 def ingest(vcf, vcz, block, infos):
-    root = zarr.open(vcz, mode="r+")
-    ingest_block(vcf, root, block, infos)
+    ingest_block(vcf, vcz, block, infos)
 
 @cli.command(name="dvcza")
 @click.option("-z", "--vcz", type=click.Path(exists=True))

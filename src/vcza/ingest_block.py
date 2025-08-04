@@ -1,6 +1,8 @@
+import fasteners
 import numpy as np
 import numcodecs
 from cyvcf2 import VCF
+import zarr
 
 from collections.abc import Iterator
 
@@ -21,17 +23,18 @@ def parse_infos(infos: tuple[str]) -> Iterator[tuple[str, str, str]]:
         yield (field, TYPE_FILL_DICT[type_][0], TYPE_FILL_DICT[type_][1])
 
 
-def create_info_array(root, info_name, dtype, fill_value, desc=None):
+def create_info_array(root, info_name, lock_dir, dtype, fill_value, desc):
     array_name = f"variant_{info_name}"
-    if array_name in root:
-        raise Exception(
-            f"{array_name} already exists in this vcz, delete it first if it needs to be re-done"
-        )
 
-    if dtype == "|O":
-        object_codec = numcodecs.VLenUTF8()
-    else:
-        object_codec = None
+    # create lock so we only make one array
+    lock = fasteners.InterProcessLock(f'{lock_dir}/{array_name}.lock_file')
+    lock.acquire()
+
+    # recheck if array exists, other process might have gotten past inital check but should hang on acquiring lock
+    # once process acquires lock, array should exi
+    if array_name in root:
+        lock.release()
+        return
 
     root.full(
         name=array_name,
@@ -39,37 +42,52 @@ def create_info_array(root, info_name, dtype, fill_value, desc=None):
         chunks=root["variant_position"].chunks,
         dtype=dtype,
         fill_value=fill_value,
-        object_codec=object_codec,
+        object_codec=numcodecs.VLenUTF8() if dtype == "|O" else None
     )
 
-    if desc:
-        root[array_name].attrs.update(
-            {
-                "description": desc,
-                "_ARRAY_DIMENSIONS": root["variant_position"].attrs[
-                    "_ARRAY_DIMENSIONS"
-                ],
-            }
-        )
-    else:
-        root[array_name].attrs.update(
-            {
-                "description": "added by vcza",
-                "_ARRAY_DIMENSIONS": root["variant_position"].attrs[
-                    "_ARRAY_DIMENSIONS"
-                ],
-            }
-        )
+    root[array_name].attrs.update(
+        {
+            "description": desc,
+            "_ARRAY_DIMENSIONS": root["variant_position"].attrs[
+                "_ARRAY_DIMENSIONS"
+            ]
+        }
+    )
 
+    lock.release()
+    return
 
-def ingest_block(in_, root, block, infos):
+def ingest_block(in_, vcz, block, infos):
     d_ = {}
-    for field, dtype, fill in parse_infos(infos):
-        d_[field] = np.full(
-            root["variant_position"].blocks[block].shape, fill, dtype=dtype
-        )
+    root = zarr.open(vcz, mode="r+")
 
     vcf = VCF(in_)
+    hdr_infos = {}
+    for h_ in vcf.header_iter():
+       if h_['HeaderType'] == 'INFO':
+           hdr_infos[h_['ID']] = h_
+
+    for field in infos:
+        array_name = f"variant_{field}"
+
+        try:
+            hdr_info = hdr_infos[field]
+        except KeyError as e:
+            print(f'{field} is not in vcfs header')
+            raise e
+
+        desc = hdr_info['Description']
+        dtype = TYPE_FILL_DICT[hdr_info['Type']][0]
+        fill = TYPE_FILL_DICT[hdr_info['Type']][1]
+
+        d_[field] = np.full(
+            shape=root["variant_position"].blocks[block].shape, fill_value=fill, dtype=dtype
+        )
+
+        if array_name not in root:
+            create_info_array(root, field, vcz, dtype, fill, desc)
+
+
 
     for idx, v in enumerate(vcf):
         for field in d_:
@@ -77,3 +95,5 @@ def ingest_block(in_, root, block, infos):
 
     for field in d_:
         root[f"variant_{field}"].blocks[block] = d_[field]
+
+    return

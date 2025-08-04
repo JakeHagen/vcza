@@ -1,5 +1,6 @@
 from vcztools import _vcztools
 import numpy as np
+import zarr
 
 
 def write_hdr(file):
@@ -47,7 +48,8 @@ def write_hdr(file):
     )
 
 
-def write_block(root, block, output):
+def write_block(vcz, block, output):
+    root = zarr.open(vcz, mode="r+")
     encoder = _vcztools.VcfEncoder(
         len(root["variant_position"].blocks[block]),
         0,
